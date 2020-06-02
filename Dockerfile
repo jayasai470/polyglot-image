@@ -1,15 +1,4 @@
-# FROM openjdk:8-jdk-alpine3.9
-
-FROM alpine:3.12
-
-ARG CORRETTO_VERSION=8.252.09.1
-ARG CORRETTO_VERSION_RELEASE=${CORRETTO_VERSION}-r0
-ARG MAVEN_VERSION=3.6.3
-ARG NODE_VERSION=12.17.0
-ARG golang_version=1.13
-ARG USER_HOME_DIR="/root"
-ARG GLIBC_VER=2.31-r0
-ARG GOLANG_VERSION=1.14.3
+FROM alpine:3.12 as core
 
 LABEL maintainer="Jaya Sai Muppalla <jayasai470@gmail.com>"
 
@@ -22,13 +11,17 @@ RUN apk add --no-cache --virtual .build-deps \
         libstdc++ \
         binutils \
         bash \
-		gcc \
-		musl-dev \
-		openssl \
-		go\
+        gcc \
+        musl-dev \
+        openssl \
+        go\
         ca-certificates
 
 ## =================== java coretto alpine ===================================
+from core as core_java
+
+ARG CORRETTO_VERSION=8.252.09.1
+ARG CORRETTO_VERSION_RELEASE=${CORRETTO_VERSION}-r0
 
 RUN wget -c -O amazon-corretto-8-jre-${CORRETTO_VERSION_RELEASE}.apk https://d3pxv6yz143wms.cloudfront.net/ea/${CORRETTO_VERSION}/amazon-corretto-8-jre-${CORRETTO_VERSION_RELEASE}.apk && \
     wget -c -O amazon-corretto-8-${CORRETTO_VERSION_RELEASE}.apk https://d3pxv6yz143wms.cloudfront.net/ea/${CORRETTO_VERSION}/amazon-corretto-8-${CORRETTO_VERSION_RELEASE}.apk && \
@@ -43,11 +36,12 @@ ENV JAVA_HOME=/usr/lib/jvm/default-jvm
 ENV PATH=$PATH:/usr/lib/jvm/default-jvm/bin
 
 ## ------------------------ maven -----------------------------
-# Define the URL where maven can be downloaded from
+FROM core_java as core_java_maven
+
+ARG MAVEN_VERSION=3.6.3
+ARG USER_HOME_DIR="/root"
 ARG BASE_URL=https://archive.apache.org/dist/maven/maven-3/$MAVEN_VERSION/binaries
 
-# https://archive.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz
-# Create the directories, download maven, validate the download, install it, remove downloaded file and set links
 RUN mkdir -p /usr/share/maven /usr/share/maven/ref \
   && echo "$" \
   && echo "Downlaoding maven from $BASE_URL/apache-maven-$MAVEN_VERSION-bin.tar.gz" \
@@ -64,13 +58,16 @@ RUN mkdir -p /usr/share/maven /usr/share/maven/ref \
   && rm -f /tmp/apache-maven.tar.gz \
   && ln -s /usr/share/maven/bin/mvn /usr/bin/mvn
 
-# Define environmental variables required by Maven, like Maven_Home directory and where the maven repo is located
 ENV MAVEN_HOME /usr/share/maven
 ENV MAVEN_CONFIG "$USER_HOME_DIR/.m2"
 
 RUN mvn -version
 
 # ## ----------------------------- node -------------------------------
+From core_java_maven as core_java_maven_nodejs
+
+ARG NODE_VERSION=12.17.0
+
 RUN addgroup -g 1000 node \
     && adduser -u 1000 -G node -s /bin/sh -D node \
     && ARCH= && alpineArch="$(apk --print-arch)" \
@@ -89,7 +86,6 @@ RUN addgroup -g 1000 node \
       && ln -s /usr/local/bin/node /usr/local/bin/nodejs; \
   else \
     echo "Building from source" \
-    # backup build
     && apk add --no-cache --virtual .build-deps-full \
         binutils-gold \
         g++ \
@@ -136,7 +132,10 @@ RUN addgroup -g 1000 node \
   && node --version \
   && npm --version
 
-# ## golang
+# ## ======================== golang ==================================
+from core_java_maven_nodejs as core_java_maven_nodejs_golang
+
+ARG GOLANG_VERSION=1.14.3
 
 # set up nsswitch.conf for Go's "netgo" implementation
 # - https://github.com/golang/go/blob/go1.9.1/src/net/conf.go#L194-L275
@@ -190,6 +189,10 @@ WORKDIR $GOPATH
 
 ## ================ awscliv2 ========================= 
 # install glibc compatibility for alpine
+from core_java_maven_nodejs_golang as core_java_maven_nodejs_golang_awscliv2
+
+ARG GLIBC_VER=2.31-r0
+
 RUN curl -sL https://alpine-pkgs.sgerrand.com/sgerrand.rsa.pub -o /etc/apk/keys/sgerrand.rsa.pub \
     && curl -sLO https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-${GLIBC_VER}.apk \
     && curl -sLO https://github.com/sgerrand/alpine-pkg-glibc/releases/download/${GLIBC_VER}/glibc-bin-${GLIBC_VER}.apk \
